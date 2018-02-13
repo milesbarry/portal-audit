@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+
+# Load the credentials file
+
+source credentials &>/dev/null
+
+if [[ $? != 0 ]]; then 
+  echo "credentials file not present"
+  exit 1
+fi
+
+# Create temp files and required directory structure
+
+TEMP_VM_UUIDS=$(mktemp)
+TEMP_PH_UUIDS=$(mktemp)
+rm -rf output
+mkdir -p {output,output/physical,output/virtual}
+
+# Get all UUID's of virtual and physical systems
+
+echo -n "Getting all UUID's of virtual machines, please wait ... "
+
+curl -m 120 -s -u $PORTAL_USER:$PORTAL_PASS -k "https://subscription.rhn.redhat.com/subscription/owners/$PORTAL_ID/consumers?fact=virt.is_guest:True&include=uuid" | python -mjson.tool | jq -r .[].uuid > $TEMP_VM_UUIDS
+
+TOT_VM=$(cat $TEMP_VM_UUIDS | wc -l)
+
+echo $TOT_VM found
+
+echo -n "Getting all UUID's of phyiscal machines, please wait ... "
+
+curl -m 120 -s -u $PORTAL_USER:$PORTAL_PASS -k "https://subscription.rhn.redhat.com/subscription/owners/$PORTAL_ID/consumers?fact=virt.is_guest:False&include=uuid" | python -mjson.tool | jq -r .[].uuid > $TEMP_PH_UUIDS
+
+TOT_PH=$(cat $TEMP_PH_UUIDS | wc -l)
+
+echo $TOT_PH found
+
+# Get facts about all physical machines
+
+COUNTER=0
+while read uuid; do
+  curl -m 120 -s -u $PORTAL_USER:$PORTAL_PASS -k "https://subscription.rhn.redhat.com/subscription/consumers/$uuid?include=facts&include=uuid" | python -mjson.tool > output/physical/$uuid &
+  ((COUNTER++)) 
+  echo -ne "\rPhysical machines processed: $COUNTER/$TOT_PH"
+  sleep 0.10
+done < $TEMP_PH_UUIDS
+echo " ... waiting for all processes to finish"
+wait
+
+COUNTER=0
+while read uuid; do
+  curl -m 120 -s -u $PORTAL_USER:$PORTAL_PASS -k "https://subscription.rhn.redhat.com/subscription/consumers/$uuid?include=facts&include=uuid" | python -mjson.tool > output/virtual/$uuid &
+  ((COUNTER++))
+  echo -ne "\rVirtual machines processed: $COUNTER/$TOT_VM"
+  sleep 0.10
+done < $TEMP_VM_UUIDS
+echo " ... waiting for all processes to finish"
+wait
